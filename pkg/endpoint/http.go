@@ -5,7 +5,9 @@ import (
 	"net/http"
 	"strings"
 
+	gw "github.com/grpc-ecosystem/grpc-gateway/runtime"
 	"github.com/sirupsen/logrus"
+	"github.com/tmc/grpc-websocket-proxy/wsproxy"
 	"google.golang.org/grpc"
 )
 
@@ -15,10 +17,23 @@ var (
 )
 
 // httpServer returns a HTTP server with the basic mux handler.
-func httpServer() *http.Server {
+func httpServer(gw *gw.ServeMux) *http.Server {
 	// Set up root HTTP mux with basic response handlers
 	mux := http.NewServeMux()
 	handleBasic(mux)
+
+	mux.Handle(
+		"/v3/",
+		wsproxy.WebsocketProxy(
+			gw,
+			wsproxy.WithRequestMutator(
+				func(incoming *http.Request, outgoing *http.Request) *http.Request {
+					outgoing.Method = "POST"
+					return outgoing
+				},
+			),
+		),
+	)
 
 	return &http.Server{
 		Handler:  mux,

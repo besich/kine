@@ -21,6 +21,9 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
+
+	gw "github.com/grpc-ecosystem/grpc-gateway/runtime"
+	etcdservergw "go.etcd.io/etcd/api/v3/etcdserverpb/gw"
 )
 
 const (
@@ -74,15 +77,20 @@ func Listen(ctx context.Context, config Config) (ETCDConfig, error) {
 	}
 	b.Register(grpcServer)
 
-	// set up HTTP server with basic mux
-	httpServer := httpServer()
-
 	// Create raw listener and wrap in cmux for protocol switching
 	listener, err := createListener(config)
 	if err != nil {
 		return ETCDConfig{}, errors.Wrap(err, "creating listener")
 	}
 	m := cmux.New(listener)
+
+	gw, err := registerGateway(ctx, listener)
+	if err != nil {
+		return ETCDConfig{}, errors.Wrap(err, "register gateway")
+	}
+
+	// set up HTTP server with basic mux
+	httpServer := httpServer(gw)
 
 	if config.ServerTLSConfig.CertFile != "" && config.ServerTLSConfig.KeyFile != "" {
 		// If using TLS, wrap handler in GRPC/HTTP switching handler and serve TLS
@@ -262,4 +270,37 @@ func networkAndAddress(str string) (string, string) {
 		return parts[0], parts[1]
 	}
 	return "", parts[0]
+}
+
+type registerHandlerFunc func(context.Context, *gw.ServeMux, *grpc.ClientConn) error
+
+func registerGateway(ctx context.Context, listen net.Listener) (*gw.ServeMux, error) {
+	conn, err := grpc.DialContext(ctx, listen.Addr().String(), grpc.WithInsecure())
+	if err != nil {
+		return nil, err
+	}
+	gwmux := gw.NewServeMux()
+
+	handlers := []registerHandlerFunc{
+		etcdservergw.RegisterKVHandler,
+		etcdservergw.RegisterWatchHandler,
+		etcdservergw.RegisterLeaseHandler,
+		etcdservergw.RegisterClusterHandler,
+		etcdservergw.RegisterMaintenanceHandler,
+		etcdservergw.RegisterAuthHandler,
+	}
+	for _, h := range handlers {
+		if err := h(ctx, gwmux, conn); err != nil {
+			return nil, err
+		}
+	}
+	go func() {
+		<-ctx.Done()
+		if cerr := conn.Close(); cerr != nil {
+			logrus.Warnf(
+				"failed to close connection address=%s error=%v", listen.Addr().String(), cerr)
+		}
+	}()
+
+	return gwmux, nil
 }
