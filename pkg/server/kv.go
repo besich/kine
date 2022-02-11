@@ -7,6 +7,7 @@ import (
 	"github.com/sirupsen/logrus"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
+	clientv3 "go.etcd.io/etcd/client/v3"
 )
 
 // explicit interface check
@@ -98,7 +99,45 @@ func toKV(kv *KeyValue) *mvccpb.KeyValue {
 }
 
 func (k *KVServerBridge) Put(ctx context.Context, r *etcdserverpb.PutRequest) (*etcdserverpb.PutResponse, error) {
-	return nil, fmt.Errorf("put is not supported")
+	rangeResp, err := k.limited.Range(ctx, &etcdserverpb.RangeRequest{
+		Key: r.Key,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	rev := int64(0)
+	if len(rangeResp.Kvs) > 0 {
+		rev = rangeResp.Kvs[0].ModRevision
+	}
+	cmp := clientv3.Compare(clientv3.ModRevision(string(r.Key)), "=", rev)
+
+	txn := &etcdserverpb.TxnRequest{
+		Compare: []*etcdserverpb.Compare{
+			(*etcdserverpb.Compare)(&cmp),
+		},
+		Success: []*etcdserverpb.RequestOp{
+			{
+				Request: &etcdserverpb.RequestOp_RequestPut{RequestPut: r},
+			},
+		},
+		Failure: []*etcdserverpb.RequestOp{
+			{
+				Request: &etcdserverpb.RequestOp_RequestRange{
+					RequestRange: &etcdserverpb.RangeRequest{Key: r.Key},
+				},
+			},
+		},
+	}
+
+	resp, err := k.limited.Txn(ctx, txn)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Responses) == 0 {
+		return nil, fmt.Errorf("broken internal put implementation")
+	}
+	return resp.Responses[0].GetResponsePut(), nil
 }
 
 func (k *KVServerBridge) DeleteRange(ctx context.Context, r *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
