@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"io"
 	"sync"
 	"sync/atomic"
 
 	"github.com/sirupsen/logrus"
 	"go.etcd.io/etcd/api/v3/etcdserverpb"
 	"go.etcd.io/etcd/api/v3/mvccpb"
+	"go.etcd.io/etcd/api/v3/v3rpc/rpctypes"
 )
 
 var watchID int64
@@ -15,7 +17,7 @@ var watchID int64
 // explicit interface check
 var _ etcdserverpb.WatchServer = (*KVServerBridge)(nil)
 
-func (s *KVServerBridge) Watch(ws etcdserverpb.Watch_WatchServer) error {
+func (s *KVServerBridge) Watch(ws etcdserverpb.Watch_WatchServer) (err error) {
 	w := watcher{
 		server:  ws,
 		backend: s.limited.backend,
@@ -23,14 +25,43 @@ func (s *KVServerBridge) Watch(ws etcdserverpb.Watch_WatchServer) error {
 	}
 	defer w.Close()
 
+	errc := make(chan error, 1)
+	go func() {
+		if rerr := w.recvLoop(); rerr != nil {
+			// TODO
+
+			errc <- rerr
+		}
+	}()
+
+	select {
+	case err = <-errc:
+		if err == context.Canceled {
+			err = rpctypes.ErrGRPCWatchCanceled
+		}
+
+	case <-ws.Context().Done():
+		err = ws.Context().Err()
+		if err == context.Canceled {
+			err = rpctypes.ErrGRPCWatchCanceled
+		}
+	}
+
+	return err
+}
+
+func (w *watcher) recvLoop() error {
 	for {
-		msg, err := ws.Recv()
+		msg, err := w.server.Recv()
+		if err == io.EOF {
+			return nil
+		}
 		if err != nil {
 			return err
 		}
 
 		if msg.GetCreateRequest() != nil {
-			w.Start(ws.Context(), msg.GetCreateRequest())
+			w.Start(w.server.Context(), msg.GetCreateRequest())
 		} else if msg.GetCancelRequest() != nil {
 			logrus.Tracef("WATCH CANCEL REQ id=%d", msg.GetCancelRequest().GetWatchId())
 			w.Cancel(msg.GetCancelRequest().WatchId, nil)
