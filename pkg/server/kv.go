@@ -141,7 +141,38 @@ func (k *KVServerBridge) Put(ctx context.Context, r *etcdserverpb.PutRequest) (*
 }
 
 func (k *KVServerBridge) DeleteRange(ctx context.Context, r *etcdserverpb.DeleteRangeRequest) (*etcdserverpb.DeleteRangeResponse, error) {
-	return nil, fmt.Errorf("delete is not supported")
+	txn := &etcdserverpb.TxnRequest{
+		Compare: []*etcdserverpb.Compare{},
+		Success: []*etcdserverpb.RequestOp{
+			{
+				Request: &etcdserverpb.RequestOp_RequestRange{
+					RequestRange: &etcdserverpb.RangeRequest{Key: r.Key, RangeEnd: r.RangeEnd},
+				},
+			},
+			{
+				Request: &etcdserverpb.RequestOp_RequestDeleteRange{
+					RequestDeleteRange: r,
+				},
+			},
+		},
+	}
+
+	resp, err := k.limited.Txn(ctx, txn)
+	if err != nil {
+		return nil, err
+	}
+
+	rangeResp := resp.Responses[0].GetResponseRange()
+	if len(resp.Responses) == 0 {
+		return nil, fmt.Errorf("broken internal delete_range implementation")
+	}
+
+	deleteRangeResp := etcdserverpb.DeleteRangeResponse{
+		Header:  rangeResp.Header,
+		Deleted: int64(len(rangeResp.Kvs)),
+	}
+
+	return &deleteRangeResp, nil
 }
 
 func (k *KVServerBridge) Txn(ctx context.Context, r *etcdserverpb.TxnRequest) (*etcdserverpb.TxnResponse, error) {
