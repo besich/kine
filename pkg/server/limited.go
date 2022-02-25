@@ -13,7 +13,7 @@ type LimitedServer struct {
 }
 
 func (l *LimitedServer) Range(ctx context.Context, r *etcdserverpb.RangeRequest) (*RangeResponse, error) {
-	if len(r.RangeEnd) == 0 {
+	if len(r.RangeEnd) == 0 || r.Key[len(r.Key)-1] != '/' {
 		return l.get(ctx, r)
 	}
 	return l.list(ctx, r)
