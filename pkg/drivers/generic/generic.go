@@ -58,7 +58,7 @@ var (
 	    ON maxkv.id = kv.id
 		WHERE
 			  (kv.deleted = 0 OR ?)
-		ORDER BY kv.id ASC
+		ORDER BY kv.name ASC
 		`, revSQL, compactRevSQL, columns)
 )
 
