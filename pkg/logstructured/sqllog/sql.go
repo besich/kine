@@ -539,9 +539,15 @@ func scan(rows *sql.Rows, rev *int64, compact *int64, event *server.Event) error
 		return err
 	}
 
+	event.PrevKV.Key = event.KV.Key
+
 	if event.Create {
 		event.KV.CreateRevision = event.KV.ModRevision
 		event.PrevKV = nil
+	}
+
+	if event.Delete {
+		event.KV.Value = []byte{}
 	}
 
 	*compact = c.Int64

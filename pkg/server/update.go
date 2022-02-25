@@ -51,6 +51,7 @@ func (l *LimitedServer) update(ctx context.Context, rev int64, key string, value
 				Response: &etcdserverpb.ResponseOp_ResponsePut{
 					ResponsePut: &etcdserverpb.PutResponse{
 						Header: txnHeader(rev),
+						PrevKv: toKV(kv),
 					},
 				},
 			},
